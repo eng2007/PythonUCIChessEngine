@@ -94,6 +94,12 @@ class UCIProtocol:
         self.running = True
         self.debug_mode = False
         
+        # Ponder state
+        self.ponder_move = None  # Expected opponent's move
+        self.pondering = False   # Currently pondering
+        self.ponderhit_count = 0 # Stats: how often we predicted correctly
+        self.ponder_total = 0    # Stats: total ponder attempts
+        
         # Initialize options
         self.options: Dict[str, UCIOption] = {}
         self._init_options()
@@ -106,6 +112,7 @@ class UCIProtocol:
         self.options = {
             "Hash": UCIOption("Hash", "spin", self.DEFAULT_HASH_SIZE, 1, 1024),
             "Depth": UCIOption("Depth", "spin", self.DEFAULT_DEPTH, 1, 30),
+            "Ponder": UCIOption("Ponder", "check", True),
             "UseTranspositionTable": UCIOption("UseTranspositionTable", "check", self.DEFAULT_USE_TT),
             "UseNullMove": UCIOption("UseNullMove", "check", self.DEFAULT_USE_NMP),
             "UseLMR": UCIOption("UseLMR", "check", self.DEFAULT_USE_LMR),
@@ -159,6 +166,8 @@ class UCIProtocol:
             self._cmd_go(args)
         elif command == "stop":
             self._cmd_stop()
+        elif command == "ponderhit":
+            self._cmd_ponderhit()
         elif command == "quit":
             self._cmd_quit()
         elif command == "debug":
@@ -372,8 +381,20 @@ class UCIProtocol:
         
         best_move, score = self.search_engine.search(self.board, depth, info_callback)
         
+        # Get ponder move (expected opponent's reply) from PV
+        ponder_move_str = ""
+        if best_move and self.options["Ponder"].value:
+            pv = self.search_engine.pv
+            if len(pv) >= 2:
+                # PV[0] is our move, PV[1] is expected opponent reply
+                self.ponder_move = pv[1]
+                ponder_move_str = f" ponder {pv[1].to_uci()}"
+                self.ponder_total += 1
+            else:
+                self.ponder_move = None
+        
         if best_move:
-            self._send(f"bestmove {best_move.to_uci()}")
+            self._send(f"bestmove {best_move.to_uci()}{ponder_move_str}")
         else:
             legal_moves = self.move_generator.generate_legal_moves(self.board)
             if legal_moves:
@@ -384,6 +405,21 @@ class UCIProtocol:
     def _cmd_stop(self):
         """Handle 'stop' command - stop searching."""
         self.search_engine.stop()
+        self.pondering = False
+    
+    def _cmd_ponderhit(self):
+        """
+        Handle 'ponderhit' command.
+        
+        Called when the opponent played the move we predicted.
+        This means our pondering was on the right track.
+        """
+        if self.ponder_move is not None:
+            self.ponderhit_count += 1
+            if self.debug_mode:
+                hit_rate = (self.ponderhit_count / self.ponder_total * 100) if self.ponder_total > 0 else 0
+                self._send(f"info string Ponderhit! Rate: {hit_rate:.1f}% ({self.ponderhit_count}/{self.ponder_total})")
+        self.pondering = False
     
     def _cmd_quit(self):
         """Handle 'quit' command - exit the engine."""

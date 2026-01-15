@@ -432,9 +432,17 @@ class Board:
         """Check if current position has occurred 3 times (draw by repetition)."""
         if len(self.position_history) < 5:
             return False
+        return self.repetition_count() >= 3
+    
+    def repetition_count(self) -> int:
+        """
+        Count how many times the current position has occurred.
+        Useful for detecting approaching draws (2 repetitions = danger).
+        """
+        if len(self.position_history) < 1:
+            return 1
         current_hash = self.position_history[-1]
-        count = sum(1 for h in self.position_history if h == current_hash)
-        return count >= 3
+        return sum(1 for h in self.position_history if h == current_hash)
     
     def is_fifty_moves(self) -> bool:
         """Check if 50-move rule applies (draw)."""

@@ -55,6 +55,10 @@ CHECK_EXTENSION = 1  # Extend search by 1 ply when in check
 IID_DEPTH_LIMIT = 4  # Minimum depth to apply IID
 IID_REDUCTION = 2    # Depth reduction for IID search
 
+# Contempt - penalty for accepting draws when winning
+# Higher value = less likely to accept draws
+CONTEMPT = 25  # centipawns
+
 # SEE piece values (for fast lookup)
 SEE_VALUES = {
     PAWN: 100,
@@ -545,12 +549,18 @@ class SearchEngine:
         self.nodes_searched += 1
         original_alpha = alpha
         
-        # Draw detection
+        # Draw detection with contempt
         if not is_root:
             if board.is_fifty_moves() or board.is_repetition():
-                return 0
+                # Apply contempt: in winning position, avoid draw
+                return -CONTEMPT
             if board.has_insufficient_material():
-                return 0
+                return -CONTEMPT
+            # Penalty for approaching repetition (2nd occurrence)
+            rep_count = board.repetition_count()
+            if rep_count >= 2:
+                # Position repeated - strong penalty to avoid 3rd repetition
+                return -CONTEMPT * 2
         
         # Probe TT
         tt_move = None

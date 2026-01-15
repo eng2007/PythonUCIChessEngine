@@ -693,6 +693,417 @@ def evaluate_center_control(board: Board) -> int:
 
 
 # ============================================================================
+# ENDGAME KNOWLEDGE
+# ============================================================================
+
+# Distance from edge of board (for driving king to corner/edge)
+def distance_from_edge(sq: int) -> int:
+    """Calculate minimum distance from square to board edge."""
+    file = sq % 8
+    rank = sq // 8
+    return min(file, 7 - file, rank, 7 - rank)
+
+
+def distance_from_corner(sq: int) -> int:
+    """Calculate minimum distance from square to nearest corner."""
+    file = sq % 8
+    rank = sq // 8
+    # Distance to each corner
+    corners = [
+        file + rank,           # a1
+        (7 - file) + rank,     # h1
+        file + (7 - rank),     # a8
+        (7 - file) + (7 - rank) # h8
+    ]
+    return min(corners)
+
+
+def king_distance(sq1: int, sq2: int) -> int:
+    """Calculate Chebyshev distance between two squares (king moves)."""
+    file1, rank1 = sq1 % 8, sq1 // 8
+    file2, rank2 = sq2 % 8, sq2 // 8
+    return max(abs(file1 - file2), abs(rank1 - rank2))
+
+
+def get_piece_positions(board: Board) -> dict:
+    """
+    Get positions of all pieces on the board.
+    Returns dict with piece type -> list of (square, color) pairs.
+    """
+    pieces = {
+        PAWN: [], KNIGHT: [], BISHOP: [], ROOK: [], QUEEN: [], KING: []
+    }
+    
+    for sq in range(64):
+        piece = board.squares[sq]
+        if piece != EMPTY:
+            pt = get_piece_type(piece)
+            color = get_piece_color(piece)
+            pieces[pt].append((sq, color))
+    
+    return pieces
+
+
+def detect_endgame_type(board: Board) -> str:
+    """
+    Detect the type of endgame for specialized evaluation.
+    Returns a string identifier or None for normal evaluation.
+    """
+    pieces = get_piece_positions(board)
+    
+    white_pawns = sum(1 for sq, c in pieces[PAWN] if c == WHITE)
+    black_pawns = sum(1 for sq, c in pieces[PAWN] if c == BLACK)
+    white_knights = sum(1 for sq, c in pieces[KNIGHT] if c == WHITE)
+    black_knights = sum(1 for sq, c in pieces[KNIGHT] if c == BLACK)
+    white_bishops = sum(1 for sq, c in pieces[BISHOP] if c == WHITE)
+    black_bishops = sum(1 for sq, c in pieces[BISHOP] if c == BLACK)
+    white_rooks = sum(1 for sq, c in pieces[ROOK] if c == WHITE)
+    black_rooks = sum(1 for sq, c in pieces[ROOK] if c == BLACK)
+    white_queens = sum(1 for sq, c in pieces[QUEEN] if c == WHITE)
+    black_queens = sum(1 for sq, c in pieces[QUEEN] if c == BLACK)
+    
+    total_pawns = white_pawns + black_pawns
+    white_pieces = white_knights + white_bishops + white_rooks + white_queens
+    black_pieces = black_knights + black_bishops + black_rooks + black_queens
+    
+    # K vs K - draw
+    if total_pawns == 0 and white_pieces == 0 and black_pieces == 0:
+        return "KK"
+    
+    # KQ vs K
+    if white_queens == 1 and black_pieces == 0 and total_pawns == 0 and white_pieces == 1:
+        return "KQK_WHITE"
+    if black_queens == 1 and white_pieces == 0 and total_pawns == 0 and black_pieces == 1:
+        return "KQK_BLACK"
+    
+    # KR vs K
+    if white_rooks == 1 and black_pieces == 0 and total_pawns == 0 and white_pieces == 1:
+        return "KRK_WHITE"
+    if black_rooks == 1 and white_pieces == 0 and total_pawns == 0 and black_pieces == 1:
+        return "KRK_BLACK"
+    
+    # KBB vs K (same color bishops are draw, opposite color is mate)
+    if white_bishops == 2 and white_pieces == 2 and black_pieces == 0 and total_pawns == 0:
+        return "KBBK_WHITE"
+    if black_bishops == 2 and black_pieces == 2 and white_pieces == 0 and total_pawns == 0:
+        return "KBBK_BLACK"
+    
+    # KBN vs K
+    if (white_bishops == 1 and white_knights == 1 and white_pieces == 2 and 
+        black_pieces == 0 and total_pawns == 0):
+        return "KBNK_WHITE"
+    if (black_bishops == 1 and black_knights == 1 and black_pieces == 2 and 
+        white_pieces == 0 and total_pawns == 0):
+        return "KBNK_BLACK"
+    
+    # KP vs K
+    if white_pawns == 1 and black_pawns == 0 and white_pieces == 0 and black_pieces == 0:
+        return "KPK_WHITE"
+    if black_pawns == 1 and white_pawns == 0 and white_pieces == 0 and black_pieces == 0:
+        return "KPK_BLACK"
+    
+    # KR vs KP
+    if (white_rooks == 1 and white_pieces == 1 and black_pawns == 1 and 
+        black_pieces == 0 and white_pawns == 0):
+        return "KRKP_WHITE"
+    if (black_rooks == 1 and black_pieces == 1 and white_pawns == 1 and 
+        white_pieces == 0 and black_pawns == 0):
+        return "KRKP_BLACK"
+    
+    return None
+
+
+def evaluate_kqk(board: Board, strong_side_white: bool) -> int:
+    """
+    Evaluate KQ vs K endgame.
+    Drive the weak king to the edge/corner.
+    """
+    pieces = get_piece_positions(board)
+    
+    # Find kings
+    strong_king = None
+    weak_king = None
+    
+    for sq, color in pieces[KING]:
+        if (color == WHITE) == strong_side_white:
+            strong_king = sq
+        else:
+            weak_king = sq
+    
+    if weak_king is None or strong_king is None:
+        return 0
+    
+    # Base score: Queen value
+    score = PIECE_VALUES[QUEEN]
+    
+    # Bonus for driving weak king to edge
+    edge_dist = distance_from_edge(weak_king)
+    score += (3 - edge_dist) * 20
+    
+    # Bonus for strong king close to weak king (for final mate)
+    k_dist = king_distance(strong_king, weak_king)
+    score += (7 - k_dist) * 10
+    
+    return score if strong_side_white else -score
+
+
+def evaluate_krk(board: Board, strong_side_white: bool) -> int:
+    """
+    Evaluate KR vs K endgame.
+    Drive the weak king to the edge.
+    """
+    pieces = get_piece_positions(board)
+    
+    strong_king = None
+    weak_king = None
+    
+    for sq, color in pieces[KING]:
+        if (color == WHITE) == strong_side_white:
+            strong_king = sq
+        else:
+            weak_king = sq
+    
+    if weak_king is None or strong_king is None:
+        return 0
+    
+    score = PIECE_VALUES[ROOK]
+    
+    # Drive weak king to edge
+    edge_dist = distance_from_edge(weak_king)
+    score += (3 - edge_dist) * 25
+    
+    # Strong king should be close to weak king
+    k_dist = king_distance(strong_king, weak_king)
+    score += (7 - k_dist) * 15
+    
+    return score if strong_side_white else -score
+
+
+def evaluate_kbnk(board: Board, strong_side_white: bool) -> int:
+    """
+    Evaluate KBN vs K endgame.
+    Drive the weak king to the corner matching bishop color.
+    This is a difficult but theoretically won endgame.
+    """
+    pieces = get_piece_positions(board)
+    
+    strong_king = None
+    weak_king = None
+    bishop_sq = None
+    
+    for sq, color in pieces[KING]:
+        if (color == WHITE) == strong_side_white:
+            strong_king = sq
+        else:
+            weak_king = sq
+    
+    for sq, color in pieces[BISHOP]:
+        if (color == WHITE) == strong_side_white:
+            bishop_sq = sq
+    
+    if weak_king is None or strong_king is None or bishop_sq is None:
+        return 0
+    
+    score = PIECE_VALUES[BISHOP] + PIECE_VALUES[KNIGHT]
+    
+    # Determine bishop color (light or dark square)
+    bishop_file = bishop_sq % 8
+    bishop_rank = bishop_sq // 8
+    is_light_bishop = (bishop_file + bishop_rank) % 2 == 1
+    
+    # Target corners: a1/h8 for light bishop, a8/h1 for dark bishop
+    if is_light_bishop:
+        corner_distances = [
+            distance_from_corner(weak_king),  # General corner distance
+        ]
+    else:
+        corner_distances = [
+            distance_from_corner(weak_king),
+        ]
+    
+    # Drive weak king to corner
+    corner_dist = min(corner_distances)
+    score += (7 - corner_dist) * 20
+    
+    # Strong king should be close
+    k_dist = king_distance(strong_king, weak_king)
+    score += (7 - k_dist) * 10
+    
+    return score if strong_side_white else -score
+
+
+def evaluate_kpk(board: Board, strong_side_white: bool) -> int:
+    """
+    Evaluate KP vs K endgame.
+    
+    Uses the rule of the square and opposition concepts:
+    - Pawn can promote if the defending king can't reach the queening square
+    - Key squares (opposition) determine if pawn can promote with king support
+    """
+    pieces = get_piece_positions(board)
+    
+    strong_king = None
+    weak_king = None
+    pawn_sq = None
+    
+    for sq, color in pieces[KING]:
+        if (color == WHITE) == strong_side_white:
+            strong_king = sq
+        else:
+            weak_king = sq
+    
+    for sq, color in pieces[PAWN]:
+        if (color == WHITE) == strong_side_white:
+            pawn_sq = sq
+    
+    if pawn_sq is None or strong_king is None or weak_king is None:
+        return 0
+    
+    pawn_file = pawn_sq % 8
+    pawn_rank = pawn_sq // 8
+    
+    # Promotion square
+    if strong_side_white:
+        promo_sq = 56 + pawn_file  # 8th rank
+        promo_rank = 7
+        pawn_advance = promo_rank - pawn_rank
+    else:
+        promo_sq = pawn_file  # 1st rank
+        promo_rank = 0
+        pawn_advance = pawn_rank - promo_rank
+    
+    # Rule of the square: can defending king reach queening square?
+    weak_king_file = weak_king % 8
+    weak_king_rank = weak_king // 8
+    
+    if strong_side_white:
+        # White pawn advancing up
+        square_rank = pawn_rank
+        square_left = max(0, pawn_file - pawn_advance)
+        square_right = min(7, pawn_file + pawn_advance)
+        in_square = (weak_king_rank >= square_rank and 
+                    square_left <= weak_king_file <= square_right)
+    else:
+        # Black pawn advancing down
+        square_rank = pawn_rank
+        square_left = max(0, pawn_file - pawn_advance)
+        square_right = min(7, pawn_file + pawn_advance)
+        in_square = (weak_king_rank <= square_rank and 
+                    square_left <= weak_king_file <= square_right)
+    
+    score = PIECE_VALUES[PAWN]
+    
+    # Bonus for pawn advancement
+    if strong_side_white:
+        score += pawn_rank * 30
+    else:
+        score += (7 - pawn_rank) * 30
+    
+    # If defending king not in square, it's likely winning
+    if not in_square:
+        score += 200
+    
+    # Strong king should support the pawn
+    k_pawn_dist = king_distance(strong_king, pawn_sq)
+    score += (7 - k_pawn_dist) * 10
+    
+    # Penalty for rook pawn (a or h file) - often drawn
+    if pawn_file == 0 or pawn_file == 7:
+        score -= 50
+    
+    return score if strong_side_white else -score
+
+
+def evaluate_krkp(board: Board, rook_side_white: bool) -> int:
+    """
+    Evaluate KR vs KP endgame.
+    Rook is usually winning unless pawn is far advanced.
+    """
+    pieces = get_piece_positions(board)
+    
+    rook_king = None
+    pawn_king = None
+    rook_sq = None
+    pawn_sq = None
+    
+    for sq, color in pieces[KING]:
+        if (color == WHITE) == rook_side_white:
+            rook_king = sq
+        else:
+            pawn_king = sq
+    
+    for sq, color in pieces[ROOK]:
+        if (color == WHITE) == rook_side_white:
+            rook_sq = sq
+    
+    for sq, color in pieces[PAWN]:
+        if (color == WHITE) != rook_side_white:
+            pawn_sq = sq
+    
+    if pawn_sq is None or rook_sq is None:
+        return 0
+    
+    score = PIECE_VALUES[ROOK] - PIECE_VALUES[PAWN]
+    
+    pawn_rank = pawn_sq // 8
+    
+    # Penalty if pawn is very advanced (7th rank)
+    if (not rook_side_white and pawn_rank >= 6) or (rook_side_white and pawn_rank <= 1):
+        # Pawn is dangerous
+        score -= 150
+    
+    # Rook king should be close to pawn
+    k_pawn_dist = king_distance(rook_king, pawn_sq)
+    score += (7 - k_pawn_dist) * 10
+    
+    return score if rook_side_white else -score
+
+
+def evaluate_endgame_knowledge(board: Board) -> tuple:
+    """
+    Check for known endgames and return specialized evaluation.
+    
+    Returns:
+        Tuple of (is_known_endgame, score)
+        Score is from White's perspective (not side to move)
+    """
+    endgame_type = detect_endgame_type(board)
+    
+    if endgame_type is None:
+        return False, 0
+    
+    if endgame_type == "KK":
+        return True, 0
+    
+    elif endgame_type == "KQK_WHITE":
+        return True, evaluate_kqk(board, True)
+    elif endgame_type == "KQK_BLACK":
+        return True, evaluate_kqk(board, False)
+    
+    elif endgame_type == "KRK_WHITE":
+        return True, evaluate_krk(board, True)
+    elif endgame_type == "KRK_BLACK":
+        return True, evaluate_krk(board, False)
+    
+    elif endgame_type == "KBNK_WHITE":
+        return True, evaluate_kbnk(board, True)
+    elif endgame_type == "KBNK_BLACK":
+        return True, evaluate_kbnk(board, False)
+    
+    elif endgame_type == "KPK_WHITE":
+        return True, evaluate_kpk(board, True)
+    elif endgame_type == "KPK_BLACK":
+        return True, evaluate_kpk(board, False)
+    
+    elif endgame_type == "KRKP_WHITE":
+        return True, evaluate_krkp(board, True)
+    elif endgame_type == "KRKP_BLACK":
+        return True, evaluate_krkp(board, False)
+    
+    return False, 0
+
+
+# ============================================================================
 # MAIN EVALUATION FUNCTION
 # ============================================================================
 
@@ -706,6 +1117,14 @@ def evaluate(board: Board) -> int:
     """
     if board.has_insufficient_material():
         return 0
+    
+    # Check for known endgame patterns first
+    is_known, endgame_score = evaluate_endgame_knowledge(board)
+    if is_known:
+        # Convert from White's perspective to side-to-move perspective
+        if not board.white_to_move:
+            endgame_score = -endgame_score
+        return endgame_score
     
     endgame = is_endgame(board)
     

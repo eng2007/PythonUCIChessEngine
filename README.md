@@ -32,6 +32,11 @@
 - ✅ Piece-square tables для оценки позиции
 - ✅ **Транспозиционная таблица** (Zobrist hashing, 64MB кэш)
 - ✅ TT move ordering (лучший ход из кэша первым)
+- ✅ **Null Move Pruning** (пропуск хода для отсечения)
+- ✅ **Late Move Reductions** (сокращённый поиск для поздних ходов)
+- ✅ **Killer Move Heuristic** (запоминание ходов с отсечением)
+- ✅ **History Heuristic** (статистика успешных ходов)
+- ✅ **Principal Variation Search** (PVS)
 
 ### Улучшенная оценка позиции
 - ✅ Структура пешек (сдвоенные, изолированные, проходные, цепи)

@@ -56,8 +56,24 @@ IID_DEPTH_LIMIT = 4  # Minimum depth to apply IID
 IID_REDUCTION = 2    # Depth reduction for IID search
 
 # Contempt - penalty for accepting draws when winning
-# Higher value = less likely to accept draws
 CONTEMPT = 25  # centipawns
+
+# Razoring margins (by depth)
+RAZORING_MARGIN = [0, 125, 250, 375]  # depth 0, 1, 2, 3
+
+# Reverse Futility Pruning margins (by depth)
+REVERSE_FUTILITY_MARGIN = [0, 100, 200, 300]  # depth 0, 1, 2, 3
+
+# Late Move Pruning (LMP) - max quiet moves to search at each depth
+LMP_MOVE_COUNTS = [0, 5, 8, 12, 16]  # depth 0, 1, 2, 3, 4
+
+# Probcut
+PROBCUT_DEPTH = 5    # Minimum depth to apply Probcut
+PROBCUT_MARGIN = 200  # Margin for Probcut
+
+# Singular Extensions
+SINGULAR_DEPTH = 6    # Minimum depth for singular extensions
+SINGULAR_MARGIN = 50  # Margin to consider a move singular
 
 # SEE piece values (for fast lookup)
 SEE_VALUES = {
@@ -365,11 +381,21 @@ class SearchEngine:
         # History heuristic
         self.history: List[List[int]] = [[0] * 64 for _ in range(32)]
         
+        # Countermove table: (piece, to_square) -> best response move
+        self.countermove: Dict[Tuple[int, int], Move] = {}
+        self.last_move: Optional[Tuple[int, int]] = None  # (piece, to_sq) of last move
+        
         # Configurable options (can be set via UCI)
         self.use_tt = True
         self.use_null_move = True
         self.use_lmr = True
         self.use_iid = True
+        self.use_razoring = True
+        self.use_reverse_futility = True
+        self.use_lmp = True
+        self.use_probcut = True
+        self.use_singular_extensions = True
+        self.use_countermove = True
         
         # Statistics
         self.tt_cutoffs = 0
@@ -378,6 +404,11 @@ class SearchEngine:
         self.futility_prunes = 0
         self.check_extensions = 0
         self.iid_searches = 0
+        self.razoring_prunes = 0
+        self.reverse_futility_prunes = 0
+        self.lmp_prunes = 0
+        self.probcut_prunes = 0
+        self.singular_extensions = 0
         
         # Timing and PV
         self.search_start_time = 0.0
@@ -646,9 +677,65 @@ class SearchEngine:
                 self.null_move_cutoffs += 1
                 return beta
         
-        # Futility Pruning - get static eval
-        if extended_depth <= 3 and not in_check and abs(alpha) < MATE_SCORE - 100:
+        # Get static evaluation for pruning decisions
+        static_eval = None
+        if extended_depth <= 4 and not in_check and abs(alpha) < MATE_SCORE - 100:
             static_eval = evaluate(board)
+        
+        # ================================================================
+        # RAZORING
+        # ================================================================
+        # If static eval is very low, drop into quiescence
+        if (self.use_razoring and 
+            static_eval is not None and
+            extended_depth <= 3 and
+            not is_root and
+            not in_check):
+            
+            razor_margin = RAZORING_MARGIN[extended_depth]
+            if static_eval + razor_margin < alpha:
+                razor_score = self._quiescence(board, alpha, beta)
+                if razor_score < alpha:
+                    self.razoring_prunes += 1
+                    return razor_score
+        
+        # ================================================================
+        # REVERSE FUTILITY PRUNING (Static Null Move Pruning)
+        # ================================================================
+        # If static eval is very high, return beta
+        if (self.use_reverse_futility and
+            static_eval is not None and
+            extended_depth <= 3 and
+            not is_root and
+            not in_check):
+            
+            reverse_margin = REVERSE_FUTILITY_MARGIN[extended_depth]
+            if static_eval - reverse_margin >= beta:
+                self.reverse_futility_prunes += 1
+                return beta
+        
+        # ================================================================
+        # PROBCUT
+        # ================================================================
+        # If a shallow search finds a very high score, likely full search will too
+        if (self.use_probcut and
+            extended_depth >= PROBCUT_DEPTH and
+            not is_root and
+            not in_check and
+            abs(beta) < MATE_SCORE - 100):
+            
+            probcut_beta = beta + PROBCUT_MARGIN
+            probcut_depth = extended_depth - 4
+            
+            # Do a reduced depth search
+            probcut_score = self._alphabeta(
+                board, probcut_depth, probcut_beta - 1, probcut_beta,
+                ply, False, position_hash, False
+            )
+            
+            if probcut_score >= probcut_beta:
+                self.probcut_prunes += 1
+                return beta
         
         # Order moves
         moves = self._order_moves(board, moves, tt_move, ply)
@@ -656,10 +743,32 @@ class SearchEngine:
         best_score = -INFINITY
         best_move_at_node = None
         moves_searched = 0
+        quiet_moves_searched = 0
         
         for move in moves:
             if self.stop_search:
                 break
+            
+            is_capture = board.squares[move.to_sq] != EMPTY or move.is_en_passant
+            is_quiet = not is_capture and not move.promotion
+            
+            # ================================================================
+            # LATE MOVE PRUNING (LMP)
+            # ================================================================
+            # Skip late quiet moves at low depths
+            if (self.use_lmp and
+                is_quiet and
+                extended_depth <= 4 and
+                not in_check and
+                not is_root and
+                moves_searched > 0):
+                
+                lmp_limit = LMP_MOVE_COUNTS[min(extended_depth, 4)]
+                if quiet_moves_searched >= lmp_limit:
+                    self.lmp_prunes += 1
+                    moves_searched += 1
+                    quiet_moves_searched += 1
+                    continue
             
             # ================================================================
             # FUTILITY PRUNING
@@ -669,15 +778,17 @@ class SearchEngine:
                 moves_searched > 0 and
                 extended_depth <= 3 and
                 not in_check and
-                not move.promotion and
-                board.squares[move.to_sq] == EMPTY and
-                not move.is_en_passant):
+                is_quiet):
                 
                 futility_value = static_eval + FUTILITY_MARGIN[extended_depth]
                 if futility_value <= alpha:
                     self.futility_prunes += 1
                     moves_searched += 1
+                    quiet_moves_searched += 1
                     continue
+            
+            if is_quiet:
+                quiet_moves_searched += 1
             
             # Save state
             old_castling = board.castling_rights
@@ -685,6 +796,11 @@ class SearchEngine:
             
             # Make move
             undo = board.make_move(move)
+            
+            # Track last move for countermove heuristic
+            old_last_move = self.last_move
+            moved_piece = undo.moved_piece
+            self.last_move = (moved_piece, move.to_sq)
             
             # Check if this move gives check (for LMR decision)
             gives_check = self.move_generator.is_in_check(board)
@@ -739,6 +855,7 @@ class SearchEngine:
                         )
             
             board.unmake_move(move, undo)
+            self.last_move = old_last_move  # Restore for countermove heuristic
             moves_searched += 1
             
             if score > best_score:
@@ -756,6 +873,9 @@ class SearchEngine:
             if alpha >= beta:
                 if undo.captured_piece == EMPTY and not move.promotion:
                     self._update_killers(move, ply)
+                    # Countermove heuristic - remember this as a good response
+                    if self.use_countermove and self.last_move is not None:
+                        self.countermove[self.last_move] = move
                 break
         
         # Store in TT
@@ -831,6 +951,14 @@ class SearchEngine:
                 score = 1900000 + PIECE_VALUES.get(move.promotion, 0)
             elif self._is_killer(move, ply):
                 score = 1000000
+            elif self.use_countermove and self.last_move is not None:
+                # Countermove bonus
+                cm = self.countermove.get(self.last_move)
+                if cm and move == cm:
+                    score = 900000
+                else:
+                    piece = board.squares[move.from_sq]
+                    score = self.history[piece][move.to_sq]
             else:
                 piece = board.squares[move.from_sq]
                 score = self.history[piece][move.to_sq]

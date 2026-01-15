@@ -117,6 +117,12 @@ class UCIProtocol:
             "UseNullMove": UCIOption("UseNullMove", "check", self.DEFAULT_USE_NMP),
             "UseLMR": UCIOption("UseLMR", "check", self.DEFAULT_USE_LMR),
             "UseIID": UCIOption("UseIID", "check", self.DEFAULT_USE_IID),
+            "UseRazoring": UCIOption("UseRazoring", "check", True),
+            "UseReverseFutility": UCIOption("UseReverseFutility", "check", True),
+            "UseLMP": UCIOption("UseLMP", "check", True),
+            "UseProbcut": UCIOption("UseProbcut", "check", True),
+            "UseSingularExtensions": UCIOption("UseSingularExtensions", "check", True),
+            "UseCountermove": UCIOption("UseCountermove", "check", True),
             "Clear Hash": UCIOption("Clear Hash", "button", None),
         }
     
@@ -130,6 +136,12 @@ class UCIProtocol:
         self.search_engine.use_null_move = self.options["UseNullMove"].value
         self.search_engine.use_lmr = self.options["UseLMR"].value
         self.search_engine.use_iid = self.options["UseIID"].value
+        self.search_engine.use_razoring = self.options["UseRazoring"].value
+        self.search_engine.use_reverse_futility = self.options["UseReverseFutility"].value
+        self.search_engine.use_lmp = self.options["UseLMP"].value
+        self.search_engine.use_probcut = self.options["UseProbcut"].value
+        self.search_engine.use_singular_extensions = self.options["UseSingularExtensions"].value
+        self.search_engine.use_countermove = self.options["UseCountermove"].value
     
     def run(self):
         """Main loop - read commands from stdin and process them."""

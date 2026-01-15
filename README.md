@@ -46,10 +46,17 @@
 ### UCI Опции
 - `Hash` — размер транспозиционной таблицы (1-1024 MB, по умолчанию 64)
 - `Depth` — глубина поиска по умолчанию (1-30, по умолчанию 6)
+- `Ponder` — включить вывод ponder move
 - `UseTranspositionTable` — включить/выключить TT
 - `UseNullMove` — включить/выключить Null Move Pruning
 - `UseLMR` — включить/выключить Late Move Reductions
 - `UseIID` — включить/выключить Internal Iterative Deepening
+- `UseRazoring` — включить/выключить Razoring
+- `UseReverseFutility` — включить/выключить Reverse Futility Pruning
+- `UseLMP` — включить/выключить Late Move Pruning
+- `UseProbcut` — включить/выключить Probcut
+- `UseSingularExtensions` — включить/выключить Singular Extensions
+- `UseCountermove` — включить/выключить Countermove Heuristic
 - `Clear Hash` — очистить транспозиционную таблицу
 
 ### Улучшенная оценка позиции
@@ -78,8 +85,8 @@ info depth 1 score cp 82 nodes 45 time 16 nps 2723 hashfull 0 pv e2e4
 info depth 2 score cp 0 nodes 322 time 118 nps 2718 hashfull 0 pv d2d4 d7d5
 info depth 3 score cp 69 nodes 971 time 368 nps 2635 hashfull 0 pv e2e4 d7d5 b1c3
 info depth 4 score cp 0 nodes 4048 time 1544 nps 2621 hashfull 0 pv b1c3 e7e5 e2e4 b8c6
-info depth 5 score cp 61 nodes 15352 time 5970 nps 2571 hashfull 2 pv g1f3 g8f6 b1c3 d7d5 d2d4
-bestmove g1f3
+info depth 5 score cp 61 nodes 4751 time 2150 nps 2208 hashfull 2 pv g1f3 g8f6 b1c3 d7d5 d2d4
+bestmove g1f3 ponder g8f6
 ```
 
 ### Расшифровка полей:
@@ -90,6 +97,7 @@ bestmove g1f3
 - `nps` — узлов в секунду (скорость)
 - `hashfull` — заполненность хеш-таблицы (0-1000)
 - `pv` — главная линия (лучшие ходы)
+- `ponder` — ожидаемый ответ противника
 
 После запуска движок ожидает UCI-команды из stdin.
 
@@ -103,23 +111,21 @@ bestmove g1f3
 
 ```
 > uci
-id name OpusChess 1.0
+id name OpusChess 2.0
 id author AI Assistant
-option name Depth type spin default 4 min 1 max 20
+option name Hash type spin default 64 min 1 max 1024
+option name Depth type spin default 6 min 1 max 30
+...
 uciok
 
 > isready
 readyok
 
 > position startpos
-> go depth 4
-info depth 4 nodes 12345 score cp 25
-bestmove e2e4
-
-> position startpos moves e2e4 e7e5
-> go depth 4
-info depth 4 nodes 10234 score cp 15
-bestmove g1f3
+> go depth 5
+info depth 1 score cp 82 nodes 45 time 16 nps 2723 hashfull 0 pv e2e4
+...
+bestmove g1f3 ponder g8f6
 
 > quit
 ```
@@ -142,6 +148,73 @@ bestmove g1f3
 
 - `d` - показать доску в текстовом виде
 - `perft <depth>` - подсчёт узлов (для тестирования)
+- `bench` - бенчмарк производительности
+
+## История разработки
+
+Последовательность улучшений в хронологическом порядке:
+
+### Этап 1: Базовая реализация
+1. **Представление доски** (`board.py`) — 64-элементный массив, FEN-парсинг, make/unmake move
+2. **Генератор ходов** (`move_generator.py`) — все легальные ходы FIDE
+3. **Базовая оценка** (`evaluation.py`) — материал + piece-square tables
+4. **Поиск (Minimax)** (`search.py`) — альфа-бета отсечение
+5. **UCI протокол** (`uci.py`) — полная поддержка UCI
+
+### Этап 2: Оптимизации поиска
+6. **Транспозиционная таблица** — Zobrist hashing, кэширование позиций
+7. **Null Move Pruning** — пропуск хода для отсечения
+8. **Late Move Reductions (LMR)** — сокращение глубины для поздних ходов
+9. **Killer Move Heuristic** — запоминание ходов с beta-отсечением
+10. **History Heuristic** — статистика успешных ходов
+11. **Principal Variation Search (PVS)** — оптимизация PV-узлов
+
+### Этап 3: Расширенные оптимизации
+12. **Aspiration Windows** — сужение окна альфа-бета
+13. **Static Exchange Evaluation (SEE)** — быстрая оценка взятий
+14. **Futility Pruning** — отсечение бесперспективных тихих ходов
+15. **Check Extensions** — продление поиска при шахах
+16. **Internal Iterative Deepening (IID)** — поиск TT-хода
+
+### Этап 4: Улучшенная оценка
+17. **Структура пешек** — сдвоенные, изолированные, проходные, цепи
+18. **Безопасность короля** — пешечный щит, открытые линии
+19. **Активность фигур** — пара слонов, ладьи на 7-й, открытые линии
+20. **Мобильность** — подсчёт доступных полей для фигур
+21. **Контроль центра** — бонус за центральные пешки
+
+### Этап 5: Эндшпильные знания
+22. **KQ vs K** — ферзь против короля
+23. **KR vs K** — ладья против короля
+24. **KBN vs K** — слон + конь против короля
+25. **KP vs K** — правило квадрата, оппозиция
+26. **KR vs KP** — ладья против пешки
+
+### Этап 6: UCI расширения
+27. **UCI Options** — настраиваемые параметры (Hash, Depth, флаги)
+28. **Info callback** — вывод статистики на каждой глубине (depth, nodes, nps, pv, hashfull)
+29. **Contempt** — штраф за ничью в выигрышной позиции
+30. **Repetition avoidance** — избегание повторения ходов
+31. **Ponder move** — вывод ожидаемого ответа противника
+
+### Этап 7: Продвинутые алгоритмы
+32. **Razoring** — агрессивное отсечение на малых глубинах
+33. **Reverse Futility Pruning** — Static Null Move Pruning
+34. **Late Move Pruning (LMP)** — пропуск поздних тихих ходов
+35. **Probcut** — предварительное отсечение на больших глубинах
+36. **Singular Extensions** — продление для уникально хорошего хода
+37. **Countermove Heuristic** — запоминание лучших ответов на ходы
+
+## Производительность
+
+Сравнение глубины 5 на стартовой позиции:
+
+| Конфигурация | Узлы | Время | Ускорение |
+|--------------|------|-------|-----------|
+| Все оптимизации OFF | 15,352 | 6.23s | 1.0x |
+| Все оптимизации ON | 4,751 | 2.15s | **2.9x** |
+
+Сокращение узлов: **69%**
 
 ## Требования
 

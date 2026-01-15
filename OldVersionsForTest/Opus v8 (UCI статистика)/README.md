@@ -1,0 +1,153 @@
+# OpusChess - UCI Chess Engine
+
+Шахматный движок на чистом Python с поддержкой протокола UCI.
+
+## Возможности
+
+### Правила шахмат (FIDE)
+- ✅ Все ходы фигур (пешка, конь, слон, ладья, ферзь, король)
+- ✅ Рокировка (короткая O-O и длинная O-O-O)
+- ✅ Взятие на проходе (en passant)
+- ✅ Превращение пешки (в ферзя, ладью, слона, коня)
+- ✅ Шах, мат, пат
+- ✅ Правило 50 ходов
+- ✅ Троекратное повторение позиции
+- ✅ Недостаточность материала для мата
+
+### Протокол UCI
+- ✅ `uci` - идентификация движка
+- ✅ `isready` / `readyok` - проверка готовности
+- ✅ `ucinewgame` - новая игра
+- ✅ `position startpos [moves ...]` - начальная позиция
+- ✅ `position fen <fen> [moves ...]` - позиция из FEN
+- ✅ `go depth <n>` - поиск на глубину n
+- ✅ `stop` - остановить поиск
+- ✅ `quit` - выход
+
+### Движок поиска
+- ✅ Minimax с альфа-бета отсечением
+- ✅ Итеративное углубление
+- ✅ Quiescence search (поиск спокойствия)
+- ✅ Упорядочивание ходов (MVV-LVA)
+- ✅ Piece-square tables для оценки позиции
+- ✅ **Транспозиционная таблица** (Zobrist hashing, 64MB кэш)
+- ✅ TT move ordering (лучший ход из кэша первым)
+- ✅ **Null Move Pruning** (пропуск хода для отсечения)
+- ✅ **Late Move Reductions** (сокращённый поиск для поздних ходов)
+- ✅ **Killer Move Heuristic** (запоминание ходов с отсечением)
+- ✅ **History Heuristic** (статистика успешных ходов)
+- ✅ **Principal Variation Search** (PVS)
+- ✅ **Aspiration Windows** (сужение окна альфа-бета)
+- ✅ **Static Exchange Evaluation** (SEE для оценки взятий)
+- ✅ **Futility Pruning** (отсечение бесперспективных ходов)
+- ✅ **Check Extensions** (продление поиска при шахах)
+- ✅ **Internal Iterative Deepening** (IID для позиций без TT-хода)
+
+### UCI Опции
+- `Hash` — размер транспозиционной таблицы (1-1024 MB, по умолчанию 64)
+- `Depth` — глубина поиска по умолчанию (1-30, по умолчанию 6)
+- `UseTranspositionTable` — включить/выключить TT
+- `UseNullMove` — включить/выключить Null Move Pruning
+- `UseLMR` — включить/выключить Late Move Reductions
+- `UseIID` — включить/выключить Internal Iterative Deepening
+- `Clear Hash` — очистить транспозиционную таблицу
+
+### Улучшенная оценка позиции
+- ✅ Структура пешек (сдвоенные, изолированные, проходные, цепи)
+- ✅ Безопасность короля (пешечный щит, открытые линии)
+- ✅ Активность фигур (пара слонов, ладьи на открытых линиях, на 7-й горизонтали)
+- ✅ Мобильность фигур (кони, слоны, ладьи, ферзь)
+- ✅ Контроль центра
+
+### Эндшпильные знания
+- ✅ **KQ vs K** — ферзь против короля (оттеснение к краю)
+- ✅ **KR vs K** — ладья против короля (форсированный мат)
+- ✅ **KBN vs K** — слон + конь против короля
+- ✅ **KP vs K** — правило квадрата, ладейные пешки
+- ✅ **KR vs KP** — ладья против пешки
+
+## Запуск
+
+```bash
+python main.py
+```
+
+### Пример вывода статистики:
+```
+info depth 1 score cp 82 nodes 45 time 16 nps 2723 hashfull 0 pv e2e4
+info depth 2 score cp 0 nodes 322 time 118 nps 2718 hashfull 0 pv d2d4 d7d5
+info depth 3 score cp 69 nodes 971 time 368 nps 2635 hashfull 0 pv e2e4 d7d5 b1c3
+info depth 4 score cp 0 nodes 4048 time 1544 nps 2621 hashfull 0 pv b1c3 e7e5 e2e4 b8c6
+info depth 5 score cp 61 nodes 15352 time 5970 nps 2571 hashfull 2 pv g1f3 g8f6 b1c3 d7d5 d2d4
+bestmove g1f3
+```
+
+### Расшифровка полей:
+- `depth` — текущая глубина поиска
+- `score cp` — оценка в сантипешках (+ белые лучше)
+- `nodes` — количество исследованных позиций
+- `time` — время в миллисекундах
+- `nps` — узлов в секунду (скорость)
+- `hashfull` — заполненность хеш-таблицы (0-1000)
+- `pv` — главная линия (лучшие ходы)
+
+После запуска движок ожидает UCI-команды из stdin.
+
+## Использование с GUI
+
+1. Откройте любую UCI-совместимую программу (Arena, CuteChess, и т.д.)
+2. Добавьте движок: укажите путь к `main.py`
+3. Начните играть!
+
+## Пример использования в консоли
+
+```
+> uci
+id name OpusChess 1.0
+id author AI Assistant
+option name Depth type spin default 4 min 1 max 20
+uciok
+
+> isready
+readyok
+
+> position startpos
+> go depth 4
+info depth 4 nodes 12345 score cp 25
+bestmove e2e4
+
+> position startpos moves e2e4 e7e5
+> go depth 4
+info depth 4 nodes 10234 score cp 15
+bestmove g1f3
+
+> quit
+```
+
+## Структура проекта
+
+```
+├── main.py              # Точка входа
+├── board.py             # Представление доски, FEN, ходы
+├── move_generator.py    # Генерация легальных ходов
+├── evaluation.py        # Оценка позиции
+├── search.py            # Поиск лучшего хода
+├── uci.py               # UCI протокол
+└── README.md            # Документация
+```
+
+## Отладочные команды
+
+Дополнительные команды (не входят в стандарт UCI):
+
+- `d` - показать доску в текстовом виде
+- `perft <depth>` - подсчёт узлов (для тестирования)
+
+## Требования
+
+- Python 3.8+
+- Без внешних зависимостей
+
+## Лицензия
+
+MIT License

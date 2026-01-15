@@ -37,6 +37,10 @@
 - ✅ **Killer Move Heuristic** (запоминание ходов с отсечением)
 - ✅ **History Heuristic** (статистика успешных ходов)
 - ✅ **Principal Variation Search** (PVS)
+- ✅ **Aspiration Windows** (сужение окна альфа-бета)
+- ✅ **Static Exchange Evaluation** (SEE для оценки взятий)
+- ✅ **Futility Pruning** (отсечение бесперспективных ходов)
+- ✅ **Check Extensions** (продление поиска при шахах)
 
 ### Улучшенная оценка позиции
 - ✅ Структура пешек (сдвоенные, изолированные, проходные, цепи)

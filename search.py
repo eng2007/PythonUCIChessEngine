@@ -374,9 +374,24 @@ class SearchEngine:
         self.futility_prunes = 0
         self.check_extensions = 0
         self.iid_searches = 0
+        
+        # Timing and PV
+        self.search_start_time = 0.0
+        self.pv: List[Move] = []  # Principal variation
+        self.info_callback = None  # Callback for reporting info per depth
     
-    def search(self, board: Board, depth: int = 4) -> Tuple[Optional[Move], int]:
-        """Search with aspiration windows."""
+    def search(self, board: Board, depth: int = 4, info_callback=None) -> Tuple[Optional[Move], int]:
+        """
+        Search with aspiration windows.
+        
+        Args:
+            board: Current board position
+            depth: Maximum search depth
+            info_callback: Optional callback function(depth, score, nodes, time_ms, pv, hashfull)
+                          Called after each iteration with search statistics
+        """
+        import time
+        
         self.nodes_searched = 0
         self.best_move = None
         self.max_depth = depth
@@ -387,6 +402,9 @@ class SearchEngine:
         self.futility_prunes = 0
         self.check_extensions = 0
         self.iid_searches = 0
+        self.pv = []
+        self.info_callback = info_callback
+        self.search_start_time = time.time()
         
         self.killer_moves = [[None, None] for _ in range(MAX_DEPTH)]
         
@@ -400,6 +418,8 @@ class SearchEngine:
         if self.best_move:
             best_move = self.best_move
             best_score = score
+            self._extract_pv(board, position_hash, 1)
+            self._report_info(1, score, board)
         
         # Iterative deepening with aspiration windows
         for current_depth in range(2, depth + 1):
@@ -431,8 +451,89 @@ class SearchEngine:
             if not self.stop_search and self.best_move is not None:
                 best_move = self.best_move
                 best_score = score
+                self._extract_pv(board, position_hash, current_depth)
+                self._report_info(current_depth, score, board)
         
         return best_move, best_score
+    
+    def _extract_pv(self, board: Board, position_hash: int, depth: int) -> None:
+        """
+        Extract the principal variation from the transposition table.
+        """
+        self.pv = []
+        
+        if not self.use_tt:
+            if self.best_move:
+                self.pv.append(self.best_move)
+            return
+        
+        seen_hashes = set()
+        current_hash = position_hash
+        undos = []  # Store undo info to restore board
+        
+        for _ in range(min(depth, 20)):  # Limit PV length
+            if current_hash in seen_hashes:
+                break
+            seen_hashes.add(current_hash)
+            
+            entry = self.tt.probe(current_hash)
+            if entry is None or entry.best_move is None:
+                break
+            
+            move = entry.best_move
+            self.pv.append(move)
+            
+            # Make the move and store undo info
+            old_castling = board.castling_rights
+            old_ep = board.en_passant_square
+            undo = board.make_move(move)
+            
+            # Update hash for next position
+            current_hash = self.zobrist.update_hash(
+                current_hash, board, move, old_castling, old_ep, undo.captured_piece
+            )
+            undos.append((move, undo))
+        
+        # Restore board state by unmaking all moves in reverse order
+        for move, undo in reversed(undos):
+            board.unmake_move(move, undo)
+    
+    def _report_info(self, depth: int, score: int, board: Board) -> None:
+        """
+        Report search information via callback.
+        """
+        import time
+        
+        if self.info_callback is None:
+            return
+        
+        elapsed = time.time() - self.search_start_time
+        time_ms = int(elapsed * 1000)
+        
+        # Calculate hash usage (permille)
+        if self.tt.size > 0:
+            hashfull = int((self.tt.writes / self.tt.size) * 1000)
+            hashfull = min(hashfull, 1000)
+        else:
+            hashfull = 0
+        
+        # Get PV string
+        pv_str = " ".join(move.to_uci() for move in self.pv) if self.pv else ""
+        if not pv_str and self.best_move:
+            pv_str = self.best_move.to_uci()
+        
+        # Calculate NPS
+        nps = int(self.nodes_searched / elapsed) if elapsed > 0 else 0
+        
+        self.info_callback(
+            depth=depth,
+            score=score,
+            nodes=self.nodes_searched,
+            time_ms=time_ms,
+            pv=pv_str,
+            hashfull=hashfull,
+            nps=nps
+        )
     
     def _alphabeta(self, board: Board, depth: int, alpha: int, beta: int,
                    ply: int, is_root: bool, position_hash: int, 
@@ -761,9 +862,17 @@ class SearchEngine:
         self.tt.clear()
     
     def get_info(self) -> dict:
+        import time
+        elapsed = time.time() - self.search_start_time if self.search_start_time > 0 else 0
+        nps = int(self.nodes_searched / elapsed) if elapsed > 0 else 0
+        hashfull = int((self.tt.writes / self.tt.size) * 1000) if self.tt.size > 0 else 0
+        
         return {
             'nodes': self.nodes_searched,
             'depth': self.max_depth,
+            'time_ms': int(elapsed * 1000),
+            'nps': nps,
+            'hashfull': min(hashfull, 1000),
             'tt_hits': self.tt.hits,
             'tt_cutoffs': self.tt_cutoffs,
             'null_cutoffs': self.null_move_cutoffs,
@@ -771,4 +880,5 @@ class SearchEngine:
             'futility_prunes': self.futility_prunes,
             'check_extensions': self.check_extensions,
             'iid_searches': self.iid_searches,
+            'pv': " ".join(m.to_uci() for m in self.pv) if self.pv else "",
         }

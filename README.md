@@ -72,6 +72,25 @@
 python main.py
 ```
 
+### Пример вывода статистики:
+```
+info depth 1 score cp 82 nodes 45 time 16 nps 2723 hashfull 0 pv e2e4
+info depth 2 score cp 0 nodes 322 time 118 nps 2718 hashfull 0 pv d2d4 d7d5
+info depth 3 score cp 69 nodes 971 time 368 nps 2635 hashfull 0 pv e2e4 d7d5 b1c3
+info depth 4 score cp 0 nodes 4048 time 1544 nps 2621 hashfull 0 pv b1c3 e7e5 e2e4 b8c6
+info depth 5 score cp 61 nodes 15352 time 5970 nps 2571 hashfull 2 pv g1f3 g8f6 b1c3 d7d5 d2d4
+bestmove g1f3
+```
+
+### Расшифровка полей:
+- `depth` — текущая глубина поиска
+- `score cp` — оценка в сантипешках (+ белые лучше)
+- `nodes` — количество исследованных позиций
+- `time` — время в миллисекундах
+- `nps` — узлов в секунду (скорость)
+- `hashfull` — заполненность хеш-таблицы (0-1000)
+- `pv` — главная линия (лучшие ходы)
+
 После запуска движок ожидает UCI-команды из stdin.
 
 ## Использование с GUI

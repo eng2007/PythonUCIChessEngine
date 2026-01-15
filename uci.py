@@ -342,10 +342,35 @@ class UCIProtocol:
         
         depth = min(depth, 30)
         
-        best_move, score = self.search_engine.search(self.board, depth)
+        # Define callback for info output at each depth
+        def info_callback(depth, score, nodes, time_ms, pv, hashfull, nps):
+            # Format score (mate detection)
+            if abs(score) > 40000:
+                # Mate score
+                mate_distance = (50000 - abs(score) + 1) // 2
+                if score > 0:
+                    score_str = f"mate {mate_distance}"
+                else:
+                    score_str = f"mate -{mate_distance}"
+            else:
+                score_str = f"cp {score}"
+            
+            # Build info string
+            info_parts = [
+                f"depth {depth}",
+                f"score {score_str}",
+                f"nodes {nodes}",
+                f"time {time_ms}",
+                f"nps {nps}",
+                f"hashfull {hashfull}",
+            ]
+            
+            if pv:
+                info_parts.append(f"pv {pv}")
+            
+            self._send("info " + " ".join(info_parts))
         
-        info = self.search_engine.get_info()
-        self._send(f"info depth {info['depth']} nodes {info['nodes']} score cp {score}")
+        best_move, score = self.search_engine.search(self.board, depth, info_callback)
         
         if best_move:
             self._send(f"bestmove {best_move.to_uci()}")

@@ -264,6 +264,18 @@ class UCIProtocol:
             self.search_engine.use_lmr = self.options[name].value
         elif name == "UseIID":
             self.search_engine.use_iid = self.options[name].value
+        elif name == "UseRazoring":
+            self.search_engine.use_razoring = self.options[name].value
+        elif name == "UseReverseFutility":
+            self.search_engine.use_reverse_futility = self.options[name].value
+        elif name == "UseLMP":
+            self.search_engine.use_lmp = self.options[name].value
+        elif name == "UseProbcut":
+            self.search_engine.use_probcut = self.options[name].value
+        elif name == "UseSingularExtensions":
+            self.search_engine.use_singular_extensions = self.options[name].value
+        elif name == "UseCountermove":
+            self.search_engine.use_countermove = self.options[name].value
     
     def _cmd_isready(self):
         """Handle 'isready' command - check if engine is ready."""

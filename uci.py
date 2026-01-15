@@ -6,7 +6,7 @@ allowing the engine to communicate with chess GUIs.
 """
 
 import sys
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from board import Board, Move, parse_square, QUEEN, ROOK, BISHOP, KNIGHT
 from move_generator import MoveGenerator
 from search import SearchEngine
@@ -14,7 +14,62 @@ from search import SearchEngine
 # Engine identification
 ENGINE_NAME = "OpusChess"
 ENGINE_AUTHOR = "AI Assistant"
-ENGINE_VERSION = "1.0"
+ENGINE_VERSION = "2.0"
+
+
+class UCIOption:
+    """Represents a UCI option."""
+    
+    def __init__(self, name: str, opt_type: str, default: Any, 
+                 min_val: Any = None, max_val: Any = None, var: List[str] = None):
+        self.name = name
+        self.type = opt_type
+        self.default = default
+        self.value = default
+        self.min = min_val
+        self.max = max_val
+        self.var = var or []
+    
+    def to_uci_string(self) -> str:
+        """Convert option to UCI string format."""
+        s = f"option name {self.name} type {self.type}"
+        
+        if self.type == "spin":
+            s += f" default {self.default} min {self.min} max {self.max}"
+        elif self.type == "check":
+            s += f" default {'true' if self.default else 'false'}"
+        elif self.type == "string":
+            s += f" default {self.default}" if self.default else " default"
+        elif self.type == "combo":
+            s += f" default {self.default}"
+            for v in self.var:
+                s += f" var {v}"
+        
+        return s
+    
+    def set_value(self, value_str: str) -> bool:
+        """Set option value from string. Returns True if successful."""
+        try:
+            if self.type == "spin":
+                val = int(value_str)
+                if self.min <= val <= self.max:
+                    self.value = val
+                    return True
+            elif self.type == "check":
+                self.value = value_str.lower() == "true"
+                return True
+            elif self.type == "string":
+                self.value = value_str
+                return True
+            elif self.type == "combo":
+                if value_str in self.var:
+                    self.value = value_str
+                    return True
+            elif self.type == "button":
+                return True
+        except ValueError:
+            pass
+        return False
 
 
 class UCIProtocol:
@@ -24,13 +79,50 @@ class UCIProtocol:
     Parses UCI commands from stdin and sends responses to stdout.
     """
     
+    # Default option values
+    DEFAULT_HASH_SIZE = 64      # MB
+    DEFAULT_DEPTH = 6
+    DEFAULT_USE_TT = True
+    DEFAULT_USE_NMP = True
+    DEFAULT_USE_LMR = True
+    DEFAULT_USE_IID = True
+    
     def __init__(self):
         """Initialize the UCI protocol handler."""
         self.board = Board()
         self.move_generator = MoveGenerator()
-        self.search_engine = SearchEngine()
         self.running = True
         self.debug_mode = False
+        
+        # Initialize options
+        self.options: Dict[str, UCIOption] = {}
+        self._init_options()
+        
+        # Create search engine with default options
+        self._create_search_engine()
+    
+    def _init_options(self):
+        """Initialize UCI options."""
+        self.options = {
+            "Hash": UCIOption("Hash", "spin", self.DEFAULT_HASH_SIZE, 1, 1024),
+            "Depth": UCIOption("Depth", "spin", self.DEFAULT_DEPTH, 1, 30),
+            "UseTranspositionTable": UCIOption("UseTranspositionTable", "check", self.DEFAULT_USE_TT),
+            "UseNullMove": UCIOption("UseNullMove", "check", self.DEFAULT_USE_NMP),
+            "UseLMR": UCIOption("UseLMR", "check", self.DEFAULT_USE_LMR),
+            "UseIID": UCIOption("UseIID", "check", self.DEFAULT_USE_IID),
+            "Clear Hash": UCIOption("Clear Hash", "button", None),
+        }
+    
+    def _create_search_engine(self):
+        """Create search engine with current options."""
+        hash_size = self.options["Hash"].value
+        self.search_engine = SearchEngine(tt_size_mb=hash_size)
+        
+        # Apply options to search engine
+        self.search_engine.use_tt = self.options["UseTranspositionTable"].value
+        self.search_engine.use_null_move = self.options["UseNullMove"].value
+        self.search_engine.use_lmr = self.options["UseLMR"].value
+        self.search_engine.use_iid = self.options["UseIID"].value
     
     def run(self):
         """Main loop - read commands from stdin and process them."""
@@ -57,6 +149,8 @@ class UCIProtocol:
             self._cmd_uci()
         elif command == "isready":
             self._cmd_isready()
+        elif command == "setoption":
+            self._cmd_setoption(args)
         elif command == "ucinewgame":
             self._cmd_ucinewgame()
         elif command == "position":
@@ -73,6 +167,8 @@ class UCIProtocol:
             self._cmd_display()
         elif command == "perft":
             self._cmd_perft(args)
+        elif command == "bench":
+            self._cmd_bench()
         else:
             if self.debug_mode:
                 self._send(f"info string Unknown command: {command}")
@@ -85,9 +181,68 @@ class UCIProtocol:
         """Handle 'uci' command - identify the engine."""
         self._send(f"id name {ENGINE_NAME} {ENGINE_VERSION}")
         self._send(f"id author {ENGINE_AUTHOR}")
-        # Options would be listed here
-        self._send("option name Depth type spin default 4 min 1 max 20")
+        
+        # List all options
+        for option in self.options.values():
+            self._send(option.to_uci_string())
+        
         self._send("uciok")
+    
+    def _cmd_setoption(self, args: List[str]):
+        """
+        Handle 'setoption' command.
+        
+        Format: setoption name <name> [value <value>]
+        """
+        if len(args) < 2 or args[0] != "name":
+            return
+        
+        # Find the option name (may contain spaces)
+        name_parts = []
+        value_str = None
+        i = 1
+        
+        while i < len(args):
+            if args[i] == "value":
+                i += 1
+                if i < len(args):
+                    value_str = " ".join(args[i:])
+                break
+            name_parts.append(args[i])
+            i += 1
+        
+        name = " ".join(name_parts)
+        
+        # Find and set the option
+        if name in self.options:
+            option = self.options[name]
+            
+            if option.type == "button":
+                # Handle button options
+                if name == "Clear Hash":
+                    self.search_engine.clear_tt()
+                    if self.debug_mode:
+                        self._send("info string Hash table cleared")
+            elif value_str is not None:
+                if option.set_value(value_str):
+                    # Apply option changes
+                    self._apply_option(name)
+                    if self.debug_mode:
+                        self._send(f"info string Option {name} set to {option.value}")
+    
+    def _apply_option(self, name: str):
+        """Apply an option change to the engine."""
+        if name == "Hash":
+            # Need to recreate search engine with new hash size
+            self._create_search_engine()
+        elif name == "UseTranspositionTable":
+            self.search_engine.use_tt = self.options[name].value
+        elif name == "UseNullMove":
+            self.search_engine.use_null_move = self.options[name].value
+        elif name == "UseLMR":
+            self.search_engine.use_lmr = self.options[name].value
+        elif name == "UseIID":
+            self.search_engine.use_iid = self.options[name].value
     
     def _cmd_isready(self):
         """Handle 'isready' command - check if engine is ready."""
@@ -96,14 +251,10 @@ class UCIProtocol:
     def _cmd_ucinewgame(self):
         """Handle 'ucinewgame' command - reset for new game."""
         self.board = Board()
-        self.search_engine = SearchEngine()
+        self.search_engine.clear_tt()
     
     def _cmd_position(self, args: List[str]):
-        """
-        Handle 'position' command - set up a position.
-        
-        Format: position [startpos | fen <fen_string>] [moves <move1> <move2> ...]
-        """
+        """Handle 'position' command - set up a position."""
         if not args:
             return
         
@@ -114,7 +265,6 @@ class UCIProtocol:
             if len(args) > 1 and args[1] == "moves":
                 moves_index = 2
         elif args[0] == "fen":
-            # Find where FEN ends (at "moves" or end of args)
             fen_parts = []
             i = 1
             while i < len(args) and args[i] != "moves":
@@ -128,7 +278,6 @@ class UCIProtocol:
             if i < len(args) and args[i] == "moves":
                 moves_index = i + 1
         
-        # Apply moves if specified
         if moves_index >= 0:
             for move_str in args[moves_index:]:
                 move = self._parse_move(move_str)
@@ -136,12 +285,7 @@ class UCIProtocol:
                     self.board.make_move(move)
     
     def _parse_move(self, move_str: str) -> Optional[Move]:
-        """
-        Parse a move string in UCI format (e.g., 'e2e4', 'e7e8q').
-        
-        Returns:
-            Move object or None if invalid
-        """
+        """Parse a move string in UCI format."""
         if len(move_str) < 4:
             return None
         
@@ -151,14 +295,12 @@ class UCIProtocol:
         except (ValueError, IndexError):
             return None
         
-        # Check for promotion
         promotion = 0
         if len(move_str) == 5:
             promo_char = move_str[4].lower()
             promo_map = {'q': QUEEN, 'r': ROOK, 'b': BISHOP, 'n': KNIGHT}
             promotion = promo_map.get(promo_char, 0)
         
-        # Generate legal moves to find the matching one
         legal_moves = self.move_generator.generate_legal_moves(self.board)
         
         for move in legal_moves:
@@ -170,7 +312,6 @@ class UCIProtocol:
                     if move.promotion == 0:
                         return move
         
-        # If no exact match found, create the move (for promotions without specifying piece)
         for move in legal_moves:
             if move.from_sq == from_sq and move.to_sq == to_sq:
                 return move
@@ -178,15 +319,8 @@ class UCIProtocol:
         return None
     
     def _cmd_go(self, args: List[str]):
-        """
-        Handle 'go' command - start searching.
-        
-        Supported options:
-        - depth <n>: Search to depth n
-        - movetime <ms>: Search for ms milliseconds
-        - infinite: Search until 'stop' command
-        """
-        depth = 4  # Default depth
+        """Handle 'go' command - start searching."""
+        depth = self.options["Depth"].value
         
         i = 0
         while i < len(args):
@@ -197,38 +331,30 @@ class UCIProtocol:
                     pass
                 i += 2
             elif args[i] == "movetime" and i + 1 < len(args):
-                # For now, ignore time and use depth
-                # TODO: Implement time management
                 i += 2
             elif args[i] == "infinite":
-                depth = 20  # Use high depth for infinite
+                depth = 30
                 i += 1
             elif args[i] in ("wtime", "btime", "winc", "binc", "movestogo"):
-                # Time control - skip for now
                 i += 2
             else:
                 i += 1
         
-        # Limit depth
-        depth = min(depth, 20)
+        depth = min(depth, 30)
         
-        # Search for best move
         best_move, score = self.search_engine.search(self.board, depth)
         
-        # Send search info
         info = self.search_engine.get_info()
         self._send(f"info depth {info['depth']} nodes {info['nodes']} score cp {score}")
         
-        # Send best move
         if best_move:
             self._send(f"bestmove {best_move.to_uci()}")
         else:
-            # No legal moves - shouldn't happen in valid position
             legal_moves = self.move_generator.generate_legal_moves(self.board)
             if legal_moves:
                 self._send(f"bestmove {legal_moves[0].to_uci()}")
             else:
-                self._send("bestmove 0000")  # No legal moves
+                self._send("bestmove 0000")
     
     def _cmd_stop(self):
         """Handle 'stop' command - stop searching."""
@@ -246,7 +372,7 @@ class UCIProtocol:
             self.debug_mode = False
     
     def _cmd_display(self):
-        """Handle 'd' command - display the board (non-standard, for debugging)."""
+        """Handle 'd' command - display the board."""
         self._send(str(self.board))
         self._send(f"FEN: {self.board.to_fen()}")
         
@@ -260,13 +386,15 @@ class UCIProtocol:
         if len(legal_moves) > 20:
             move_list += " ..."
         self._send(f"Moves: {move_list}")
+        
+        # Show current options
+        self._send("Options:")
+        for name, opt in self.options.items():
+            if opt.type != "button":
+                self._send(f"  {name}: {opt.value}")
     
     def _cmd_perft(self, args: List[str]):
-        """
-        Handle 'perft' command - count nodes at given depth (for testing).
-        
-        Format: perft <depth>
-        """
+        """Handle 'perft' command."""
         depth = 1
         if args:
             try:
@@ -278,16 +406,7 @@ class UCIProtocol:
         self._send(f"Nodes: {nodes}")
     
     def _perft(self, board: Board, depth: int) -> int:
-        """
-        Perft (performance test) - count leaf nodes at given depth.
-        
-        Args:
-            board: Current board state
-            depth: Depth to search
-            
-        Returns:
-            Number of leaf nodes
-        """
+        """Perft - count leaf nodes at given depth."""
         if depth == 0:
             return 1
         
@@ -303,3 +422,27 @@ class UCIProtocol:
             board.unmake_move(move, undo)
         
         return nodes
+    
+    def _cmd_bench(self):
+        """Run a quick benchmark."""
+        import time
+        
+        positions = [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        ]
+        
+        total_nodes = 0
+        start_time = time.time()
+        
+        for fen in positions:
+            self.board = Board(fen)
+            self.search_engine.clear_tt()
+            move, score = self.search_engine.search(self.board, 5)
+            total_nodes += self.search_engine.nodes_searched
+        
+        elapsed = time.time() - start_time
+        nps = int(total_nodes / elapsed) if elapsed > 0 else 0
+        
+        self._send(f"info string Benchmark: {total_nodes} nodes in {elapsed:.2f}s ({nps} nps)")

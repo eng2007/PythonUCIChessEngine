@@ -51,6 +51,10 @@ FUTILITY_MARGIN = [0, 200, 300, 500]  # depth 0, 1, 2, 3
 # Check Extension
 CHECK_EXTENSION = 1  # Extend search by 1 ply when in check
 
+# Internal Iterative Deepening
+IID_DEPTH_LIMIT = 4  # Minimum depth to apply IID
+IID_REDUCTION = 2    # Depth reduction for IID search
+
 # SEE piece values (for fast lookup)
 SEE_VALUES = {
     PAWN: 100,
@@ -357,12 +361,19 @@ class SearchEngine:
         # History heuristic
         self.history: List[List[int]] = [[0] * 64 for _ in range(32)]
         
+        # Configurable options (can be set via UCI)
+        self.use_tt = True
+        self.use_null_move = True
+        self.use_lmr = True
+        self.use_iid = True
+        
         # Statistics
         self.tt_cutoffs = 0
         self.null_move_cutoffs = 0
         self.lmr_reductions = 0
         self.futility_prunes = 0
         self.check_extensions = 0
+        self.iid_searches = 0
     
     def search(self, board: Board, depth: int = 4) -> Tuple[Optional[Move], int]:
         """Search with aspiration windows."""
@@ -375,6 +386,7 @@ class SearchEngine:
         self.lmr_reductions = 0
         self.futility_prunes = 0
         self.check_extensions = 0
+        self.iid_searches = 0
         
         self.killer_moves = [[None, None] for _ in range(MAX_DEPTH)]
         
@@ -441,20 +453,23 @@ class SearchEngine:
         
         # Probe TT
         tt_move = None
-        tt_entry = self.tt.probe(position_hash)
+        tt_entry = None
         
-        if tt_entry is not None and not is_root:
-            if tt_entry.depth >= depth:
-                if tt_entry.flag == TT_EXACT:
-                    self.tt_cutoffs += 1
-                    return tt_entry.score
-                elif tt_entry.flag == TT_ALPHA and tt_entry.score <= alpha:
-                    self.tt_cutoffs += 1
-                    return alpha
-                elif tt_entry.flag == TT_BETA and tt_entry.score >= beta:
-                    self.tt_cutoffs += 1
-                    return beta
-            tt_move = tt_entry.best_move
+        if self.use_tt:
+            tt_entry = self.tt.probe(position_hash)
+            
+            if tt_entry is not None and not is_root:
+                if tt_entry.depth >= depth:
+                    if tt_entry.flag == TT_EXACT:
+                        self.tt_cutoffs += 1
+                        return tt_entry.score
+                    elif tt_entry.flag == TT_ALPHA and tt_entry.score <= alpha:
+                        self.tt_cutoffs += 1
+                        return alpha
+                    elif tt_entry.flag == TT_BETA and tt_entry.score >= beta:
+                        self.tt_cutoffs += 1
+                        return beta
+                tt_move = tt_entry.best_move
         
         # Check detection
         in_check = self.move_generator.is_in_check(board)
@@ -481,8 +496,29 @@ class SearchEngine:
         # Static evaluation for pruning decisions
         static_eval = None
         
+        # ================================================================
+        # INTERNAL ITERATIVE DEEPENING (IID)
+        # ================================================================
+        # If we don't have a TT move and depth is high enough, do a
+        # reduced depth search to find a good move to search first
+        if (self.use_iid and 
+            tt_move is None and 
+            extended_depth >= IID_DEPTH_LIMIT and 
+            not in_check):
+            
+            self.iid_searches += 1
+            # Search at reduced depth
+            self._alphabeta(board, extended_depth - IID_REDUCTION, alpha, beta,
+                           ply, False, position_hash, False)
+            
+            # Try to get the best move from TT now
+            if self.use_tt:
+                tt_entry = self.tt.probe(position_hash)
+                if tt_entry is not None:
+                    tt_move = tt_entry.best_move
+        
         # Null Move Pruning
-        if (allow_null and not is_root and not in_check and 
+        if (self.use_null_move and allow_null and not is_root and not in_check and 
             extended_depth >= 3 and self._has_big_pieces(board)):
             
             board.white_to_move = not board.white_to_move
@@ -552,7 +588,8 @@ class SearchEngine:
             # ================================================================
             do_full_search = True
             
-            if (moves_searched >= LMR_FULL_DEPTH_MOVES and 
+            if (self.use_lmr and
+                moves_searched >= LMR_FULL_DEPTH_MOVES and 
                 extended_depth >= LMR_REDUCTION_LIMIT and
                 not in_check and
                 not gives_check and
@@ -611,7 +648,7 @@ class SearchEngine:
                 break
         
         # Store in TT
-        if not self.stop_search:
+        if not self.stop_search and self.use_tt:
             if best_score <= original_alpha:
                 flag = TT_ALPHA
             elif best_score >= beta:
@@ -733,4 +770,5 @@ class SearchEngine:
             'lmr_reductions': self.lmr_reductions,
             'futility_prunes': self.futility_prunes,
             'check_extensions': self.check_extensions,
+            'iid_searches': self.iid_searches,
         }

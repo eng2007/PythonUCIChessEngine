@@ -41,6 +41,16 @@
 - ✅ **Static Exchange Evaluation** (SEE для оценки взятий)
 - ✅ **Futility Pruning** (отсечение бесперспективных ходов)
 - ✅ **Check Extensions** (продление поиска при шахах)
+- ✅ **Internal Iterative Deepening** (IID для позиций без TT-хода)
+
+### UCI Опции
+- `Hash` — размер транспозиционной таблицы (1-1024 MB, по умолчанию 64)
+- `Depth` — глубина поиска по умолчанию (1-30, по умолчанию 6)
+- `UseTranspositionTable` — включить/выключить TT
+- `UseNullMove` — включить/выключить Null Move Pruning
+- `UseLMR` — включить/выключить Late Move Reductions
+- `UseIID` — включить/выключить Internal Iterative Deepening
+- `Clear Hash` — очистить транспозиционную таблицу
 
 ### Улучшенная оценка позиции
 - ✅ Структура пешек (сдвоенные, изолированные, проходные, цепи)

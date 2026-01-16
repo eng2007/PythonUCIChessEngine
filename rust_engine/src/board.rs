@@ -126,6 +126,18 @@ pub struct Board {
     pub fullmove_number: u16,
     /// Position history for repetition detection
     pub position_history: Vec<u64>,
+    
+    // Bitboards by piece type
+    pub bb_pawns: u64,
+    pub bb_knights: u64,
+    pub bb_bishops: u64,
+    pub bb_rooks: u64,
+    pub bb_queens: u64,
+    pub bb_kings: u64,
+    
+    // Bitboards by color
+    pub bb_white: u64,
+    pub bb_black: u64,
 }
 
 impl Board {
@@ -149,6 +161,14 @@ impl Board {
             halfmove_clock: 0,
             fullmove_number: 1,
             position_history: Vec::new(),
+            bb_pawns: 0,
+            bb_knights: 0,
+            bb_bishops: 0,
+            bb_rooks: 0,
+            bb_queens: 0,
+            bb_kings: 0,
+            bb_white: 0,
+            bb_black: 0,
         };
 
         // Parse piece placement
@@ -204,6 +224,9 @@ impl Board {
         if parts.len() > 5 {
             board.fullmove_number = parts[5].parse().unwrap_or(1);
         }
+
+        // Sync bitboards from squares
+        board.sync_bitboards();
 
         // Initialize position history
         board.position_history.push(board.compute_hash());
@@ -307,13 +330,20 @@ impl Board {
             self.halfmove_clock += 1;
         }
 
+        // === INCREMENTAL BITBOARD UPDATES ===
+        
+        // Clear piece from source square
+        self.clear_piece_bb(from_sq, piece);
+
         // Handle en passant capture
         if mv.is_en_passant {
-            if self.white_to_move {
-                self.squares[to_sq - 8] = EMPTY;
-            } else {
-                self.squares[to_sq + 8] = EMPTY;
-            }
+            let ep_capture_sq = if self.white_to_move { to_sq - 8 } else { to_sq + 8 };
+            let ep_pawn = if self.white_to_move { BLACK_PAWN } else { WHITE_PAWN };
+            self.squares[ep_capture_sq] = EMPTY;
+            self.clear_piece_bb(ep_capture_sq, ep_pawn);
+        } else if captured != EMPTY {
+            // Clear captured piece
+            self.clear_piece_bb(to_sq, captured);
         }
 
         // Handle castling
@@ -322,18 +352,26 @@ impl Board {
                 6 => {  // White kingside (g1)
                     self.squares[7] = EMPTY;
                     self.squares[5] = WHITE_ROOK;
+                    self.clear_piece_bb(7, WHITE_ROOK);
+                    self.set_piece_bb(5, WHITE_ROOK);
                 }
                 2 => {  // White queenside (c1)
                     self.squares[0] = EMPTY;
                     self.squares[3] = WHITE_ROOK;
+                    self.clear_piece_bb(0, WHITE_ROOK);
+                    self.set_piece_bb(3, WHITE_ROOK);
                 }
                 62 => { // Black kingside (g8)
                     self.squares[63] = EMPTY;
                     self.squares[61] = BLACK_ROOK;
+                    self.clear_piece_bb(63, BLACK_ROOK);
+                    self.set_piece_bb(61, BLACK_ROOK);
                 }
                 58 => { // Black queenside (c8)
                     self.squares[56] = EMPTY;
                     self.squares[59] = BLACK_ROOK;
+                    self.clear_piece_bb(56, BLACK_ROOK);
+                    self.set_piece_bb(59, BLACK_ROOK);
                 }
                 _ => {}
             }
@@ -344,9 +382,16 @@ impl Board {
         self.squares[from_sq] = EMPTY;
 
         // Handle promotion
-        if mv.promotion != 0 {
-            self.squares[to_sq] = (if self.white_to_move { WHITE } else { BLACK }) | mv.promotion;
-        }
+        let final_piece = if mv.promotion != 0 {
+            let promo_piece = (if self.white_to_move { WHITE } else { BLACK }) | mv.promotion;
+            self.squares[to_sq] = promo_piece;
+            promo_piece
+        } else {
+            piece
+        };
+
+        // Set piece at destination
+        self.set_piece_bb(to_sq, final_piece);
 
         // Update castling rights
         if piece_type == KING {
@@ -394,19 +439,30 @@ impl Board {
         let from_sq = mv.from_sq;
         let to_sq = mv.to_sq;
 
-        // Restore the moved piece
+        // Get the piece that was at to_sq (could be promoted piece)
+        let piece_at_to = self.squares[to_sq];
+
+        // === INCREMENTAL BITBOARD UPDATES ===
+        
+        // Clear piece from destination (might be promoted piece)
+        self.clear_piece_bb(to_sq, piece_at_to);
+
+        // Restore the moved piece at source
         self.squares[from_sq] = undo.moved_piece;
+        self.set_piece_bb(from_sq, undo.moved_piece);
 
         // Restore captured piece
         if mv.is_en_passant {
             self.squares[to_sq] = EMPTY;
-            if self.white_to_move {
-                self.squares[to_sq - 8] = BLACK_PAWN;
-            } else {
-                self.squares[to_sq + 8] = WHITE_PAWN;
-            }
+            let ep_restore_sq = if self.white_to_move { to_sq - 8 } else { to_sq + 8 };
+            let ep_pawn = if self.white_to_move { BLACK_PAWN } else { WHITE_PAWN };
+            self.squares[ep_restore_sq] = ep_pawn;
+            self.set_piece_bb(ep_restore_sq, ep_pawn);
         } else {
             self.squares[to_sq] = undo.captured_piece;
+            if undo.captured_piece != EMPTY {
+                self.set_piece_bb(to_sq, undo.captured_piece);
+            }
         }
 
         // Handle castling - move rook back
@@ -415,18 +471,26 @@ impl Board {
                 6 => {  // White kingside
                     self.squares[5] = EMPTY;
                     self.squares[7] = WHITE_ROOK;
+                    self.clear_piece_bb(5, WHITE_ROOK);
+                    self.set_piece_bb(7, WHITE_ROOK);
                 }
                 2 => {  // White queenside
                     self.squares[3] = EMPTY;
                     self.squares[0] = WHITE_ROOK;
+                    self.clear_piece_bb(3, WHITE_ROOK);
+                    self.set_piece_bb(0, WHITE_ROOK);
                 }
                 62 => { // Black kingside
                     self.squares[61] = EMPTY;
                     self.squares[63] = BLACK_ROOK;
+                    self.clear_piece_bb(61, BLACK_ROOK);
+                    self.set_piece_bb(63, BLACK_ROOK);
                 }
                 58 => { // Black queenside
                     self.squares[59] = EMPTY;
                     self.squares[56] = BLACK_ROOK;
+                    self.clear_piece_bb(59, BLACK_ROOK);
+                    self.set_piece_bb(56, BLACK_ROOK);
                 }
                 _ => {}
             }
@@ -553,6 +617,123 @@ impl Board {
         lines.push("    a   b   c   d   e   f   g   h".to_string());
         
         lines.join("\n")
+    }
+
+    // ========================================================================
+    // BITBOARD FUNCTIONS
+    // ========================================================================
+
+    /// Synchronize all bitboards from the squares array
+    pub fn sync_bitboards(&mut self) {
+        self.bb_pawns = 0;
+        self.bb_knights = 0;
+        self.bb_bishops = 0;
+        self.bb_rooks = 0;
+        self.bb_queens = 0;
+        self.bb_kings = 0;
+        self.bb_white = 0;
+        self.bb_black = 0;
+
+        for sq in 0..64 {
+            let piece = self.squares[sq];
+            if piece == EMPTY {
+                continue;
+            }
+
+            let sq_bb = 1u64 << sq;
+            let piece_type = get_piece_type(piece);
+            let is_white = is_white(piece);
+
+            // Set piece type bitboard
+            match piece_type {
+                PAWN => self.bb_pawns |= sq_bb,
+                KNIGHT => self.bb_knights |= sq_bb,
+                BISHOP => self.bb_bishops |= sq_bb,
+                ROOK => self.bb_rooks |= sq_bb,
+                QUEEN => self.bb_queens |= sq_bb,
+                KING => self.bb_kings |= sq_bb,
+                _ => {}
+            }
+
+            // Set color bitboard
+            if is_white {
+                self.bb_white |= sq_bb;
+            } else {
+                self.bb_black |= sq_bb;
+            }
+        }
+    }
+
+    /// Set a piece on a square in bitboards
+    #[inline]
+    pub fn set_piece_bb(&mut self, sq: usize, piece: u8) {
+        if piece == EMPTY {
+            return;
+        }
+
+        let sq_bb = 1u64 << sq;
+        let piece_type = get_piece_type(piece);
+
+        match piece_type {
+            PAWN => self.bb_pawns |= sq_bb,
+            KNIGHT => self.bb_knights |= sq_bb,
+            BISHOP => self.bb_bishops |= sq_bb,
+            ROOK => self.bb_rooks |= sq_bb,
+            QUEEN => self.bb_queens |= sq_bb,
+            KING => self.bb_kings |= sq_bb,
+            _ => {}
+        }
+
+        if is_white(piece) {
+            self.bb_white |= sq_bb;
+        } else {
+            self.bb_black |= sq_bb;
+        }
+    }
+
+    /// Clear a piece from a square in bitboards
+    #[inline]
+    pub fn clear_piece_bb(&mut self, sq: usize, piece: u8) {
+        if piece == EMPTY {
+            return;
+        }
+
+        let sq_bb = !(1u64 << sq);
+        let piece_type = get_piece_type(piece);
+
+        match piece_type {
+            PAWN => self.bb_pawns &= sq_bb,
+            KNIGHT => self.bb_knights &= sq_bb,
+            BISHOP => self.bb_bishops &= sq_bb,
+            ROOK => self.bb_rooks &= sq_bb,
+            QUEEN => self.bb_queens &= sq_bb,
+            KING => self.bb_kings &= sq_bb,
+            _ => {}
+        }
+
+        if is_white(piece) {
+            self.bb_white &= sq_bb;
+        } else {
+            self.bb_black &= sq_bb;
+        }
+    }
+
+    /// Get the bitboard of all occupied squares
+    #[inline]
+    pub fn get_occupied(&self) -> u64 {
+        self.bb_white | self.bb_black
+    }
+
+    /// Get bitboard of pieces for the current side to move
+    #[inline]
+    pub fn get_own_pieces(&self) -> u64 {
+        if self.white_to_move { self.bb_white } else { self.bb_black }
+    }
+
+    /// Get bitboard of enemy pieces
+    #[inline]
+    pub fn get_enemy_pieces(&self) -> u64 {
+        if self.white_to_move { self.bb_black } else { self.bb_white }
     }
 }
 

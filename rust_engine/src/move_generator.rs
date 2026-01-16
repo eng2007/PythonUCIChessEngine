@@ -5,6 +5,7 @@
 
 use crate::types::*;
 use crate::board::{Board, Move};
+use crate::bitboard::{KNIGHT_ATTACKS, KING_ATTACKS, PAWN_ATTACKS, rook_attacks, bishop_attacks};
 
 /// Direction offsets for sliding pieces
 const ROOK_DIRECTIONS: [i32; 4] = [8, -8, -1, 1];
@@ -283,126 +284,61 @@ impl MoveGenerator {
         }
     }
 
-    /// Check if a square is attacked by the specified color
+    /// Check if a square is attacked by the specified color (bitboard version)
     pub fn is_square_attacked(&self, board: &Board, sq: usize, by_white: bool) -> bool {
-        let attacker_color = if by_white { WHITE } else { BLACK };
-        let file = sq % 8;
-        let rank = sq / 8;
+        let occupied = board.get_occupied();
+        
+        // Get attacker pieces
+        let (pawns, knights, bishops, rooks, queens, kings) = if by_white {
+            (
+                board.bb_pawns & board.bb_white,
+                board.bb_knights & board.bb_white,
+                board.bb_bishops & board.bb_white,
+                board.bb_rooks & board.bb_white,
+                board.bb_queens & board.bb_white,
+                board.bb_kings & board.bb_white,
+            )
+        } else {
+            (
+                board.bb_pawns & board.bb_black,
+                board.bb_knights & board.bb_black,
+                board.bb_bishops & board.bb_black,
+                board.bb_rooks & board.bb_black,
+                board.bb_queens & board.bb_black,
+                board.bb_kings & board.bb_black,
+            )
+        };
 
-        // Check pawn attacks
-        let pawn_direction: i32 = if by_white { -8 } else { 8 };
-        let pawn_attackers = [sq as i32 + pawn_direction - 1, sq as i32 + pawn_direction + 1];
-        for attacker_sq_i32 in pawn_attackers {
-            if attacker_sq_i32 < 0 || attacker_sq_i32 >= 64 {
-                continue;
-            }
-            let attacker_sq = attacker_sq_i32 as usize;
-            let att_file = attacker_sq % 8;
-            if (att_file as i32 - file as i32).abs() != 1 {
-                continue;
-            }
-            let piece = board.squares[attacker_sq];
-            if piece != EMPTY && get_piece_type(piece) == PAWN && get_piece_color(piece) == attacker_color {
-                return true;
-            }
+        // Check pawn attacks (check from defender's perspective to find attackers)
+        let pawn_attack_mask = if by_white {
+            PAWN_ATTACKS[1][sq]  // Black pawn attack pattern to find white pawn attackers
+        } else {
+            PAWN_ATTACKS[0][sq]  // White pawn attack pattern to find black pawn attackers
+        };
+        if pawn_attack_mask & pawns != 0 {
+            return true;
         }
 
         // Check knight attacks
-        for &offset in &KNIGHT_OFFSETS {
-            let attacker_sq_i32 = sq as i32 + offset;
-            if attacker_sq_i32 < 0 || attacker_sq_i32 >= 64 {
-                continue;
-            }
-            let attacker_sq = attacker_sq_i32 as usize;
-            let att_file = attacker_sq % 8;
-            let att_rank = attacker_sq / 8;
-            if (att_file as i32 - file as i32).abs() > 2 
-               || (att_rank as i32 - rank as i32).abs() > 2 {
-                continue;
-            }
-            let piece = board.squares[attacker_sq];
-            if piece != EMPTY && get_piece_type(piece) == KNIGHT && get_piece_color(piece) == attacker_color {
-                return true;
-            }
+        if KNIGHT_ATTACKS[sq] & knights != 0 {
+            return true;
         }
 
         // Check king attacks
-        for &direction in &KING_DIRECTIONS {
-            let attacker_sq_i32 = sq as i32 + direction;
-            if attacker_sq_i32 < 0 || attacker_sq_i32 >= 64 {
-                continue;
-            }
-            let attacker_sq = attacker_sq_i32 as usize;
-            let att_file = attacker_sq % 8;
-            if (att_file as i32 - file as i32).abs() > 1 {
-                continue;
-            }
-            let piece = board.squares[attacker_sq];
-            if piece != EMPTY && get_piece_type(piece) == KING && get_piece_color(piece) == attacker_color {
-                return true;
-            }
+        if KING_ATTACKS[sq] & kings != 0 {
+            return true;
         }
 
-        // Check sliding piece attacks (rook, queen)
-        for &direction in &ROOK_DIRECTIONS {
-            if self.check_sliding_attack(board, sq, direction, attacker_color, &[ROOK, QUEEN]) {
-                return true;
-            }
+        // Check bishop/queen diagonal attacks
+        let bishop_attack = bishop_attacks(sq, occupied);
+        if bishop_attack & (bishops | queens) != 0 {
+            return true;
         }
 
-        // Check sliding piece attacks (bishop, queen)
-        for &direction in &BISHOP_DIRECTIONS {
-            if self.check_sliding_attack(board, sq, direction, attacker_color, &[BISHOP, QUEEN]) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Check if there's a sliding piece attacking along a direction
-    fn check_sliding_attack(&self, board: &Board, sq: usize, direction: i32, 
-                           attacker_color: u8, piece_types: &[u8]) -> bool {
-        let mut current_sq = sq;
-
-        loop {
-            let current_file = current_sq % 8;
-            let next_sq_i32 = current_sq as i32 + direction;
-
-            if next_sq_i32 < 0 || next_sq_i32 >= 64 {
-                break;
-            }
-            let next_sq = next_sq_i32 as usize;
-            let next_file = next_sq % 8;
-
-            // Check for wraparound
-            if direction == -1 || direction == 1 {
-                if (next_file as i32 - current_file as i32).abs() != 1 {
-                    break;
-                }
-            } else if direction == 7 || direction == -9 {
-                if next_file as i32 != current_file as i32 - 1 {
-                    break;
-                }
-            } else if direction == 9 || direction == -7 {
-                if next_file as i32 != current_file as i32 + 1 {
-                    break;
-                }
-            }
-
-            let piece = board.squares[next_sq];
-
-            if piece != EMPTY {
-                if get_piece_color(piece) == attacker_color {
-                    let piece_type = get_piece_type(piece);
-                    if piece_types.contains(&piece_type) {
-                        return true;
-                    }
-                }
-                break;
-            }
-
-            current_sq = next_sq;
+        // Check rook/queen straight attacks
+        let rook_attack = rook_attacks(sq, occupied);
+        if rook_attack & (rooks | queens) != 0 {
+            return true;
         }
 
         false

@@ -1,0 +1,15 @@
+//! OpusChess - UCI Chess Engine
+//!
+//! A chess engine written in Rust with support for:
+//! - Full FIDE chess rules
+//! - UCI protocol
+//! - Minimax search with alpha-beta pruning
+//! - Transposition table with Zobrist hashing
+//! - Advanced pruning techniques (NMP, LMR, etc.)
+
+pub mod types;
+pub mod board;
+pub mod move_generator;
+pub mod evaluation;
+pub mod search;
+pub mod uci;

@@ -52,7 +52,7 @@ const CONTEMPT: i32 = 25;
 
 pub struct ZobristHash {
     piece_keys: [[u64; 64]; 32],
-    side_key: u64,
+    pub side_key: u64,
     castling_keys: [u64; 16],
     ep_keys: [u64; 9],
 }

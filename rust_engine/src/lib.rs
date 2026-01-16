@@ -6,10 +6,12 @@
 //! - Minimax search with alpha-beta pruning
 //! - Transposition table with Zobrist hashing
 //! - Advanced pruning techniques (NMP, LMR, etc.)
+//! - Multi-threaded search (Lazy SMP)
 
 pub mod types;
 pub mod board;
 pub mod move_generator;
 pub mod evaluation;
 pub mod search;
+pub mod parallel_search;
 pub mod uci;

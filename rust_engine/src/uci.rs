@@ -7,12 +7,12 @@ use std::io::{self, BufRead, Write};
 use crate::types::*;
 use crate::board::{Board, Move};
 use crate::move_generator::MoveGenerator;
-use crate::search::SearchEngine;
+use crate::parallel_search::ParallelSearchEngine;
 
 // Engine identification
 const ENGINE_NAME: &str = "OpusChess";
 const ENGINE_AUTHOR: &str = "AI Assistant";
-const ENGINE_VERSION: &str = "2.0";
+const ENGINE_VERSION: &str = "2.1";
 
 /// UCI option representation
 #[derive(Clone)]
@@ -116,7 +116,7 @@ impl UCIOption {
 pub struct UCIProtocol {
     board: Board,
     move_generator: MoveGenerator,
-    search_engine: SearchEngine,
+    search_engine: ParallelSearchEngine,
     running: bool,
     debug_mode: bool,
     options: Vec<UCIOption>,
@@ -124,10 +124,11 @@ pub struct UCIProtocol {
 
 impl UCIProtocol {
     pub fn new() -> Self {
+        let num_threads = num_cpus::get();
         let mut protocol = UCIProtocol {
             board: Board::new(),
             move_generator: MoveGenerator::new(),
-            search_engine: SearchEngine::new(64),
+            search_engine: ParallelSearchEngine::new(64, num_threads),
             running: true,
             debug_mode: false,
             options: Vec::new(),
@@ -138,7 +139,9 @@ impl UCIProtocol {
     }
 
     fn init_options(&mut self) {
+        let default_threads = num_cpus::get() as i32;
         self.options = vec![
+            UCIOption::spin("Threads", default_threads, 1, 256),
             UCIOption::spin("Hash", 64, 1, 1024),
             UCIOption::spin("Depth", 10, 1, 30),
             UCIOption::check("Ponder", true),
@@ -159,9 +162,14 @@ impl UCIProtocol {
     fn apply_options(&mut self) {
         for opt in &self.options {
             match opt.name.as_str() {
+                "Threads" => {
+                    let threads = opt.get_int() as usize;
+                    self.search_engine.set_threads(threads);
+                }
                 "Hash" => {
                     let size = opt.get_int() as usize;
-                    self.search_engine = SearchEngine::new(size);
+                    let threads = self.search_engine.num_threads;
+                    self.search_engine = ParallelSearchEngine::new(size, threads);
                 }
                 "UseTranspositionTable" => {
                     self.search_engine.use_tt = opt.get_bool();
@@ -425,33 +433,26 @@ impl UCIProtocol {
         depth = depth.min(30);
 
         // Search with info callback
-        let (best_move, _score) = {
-            let mut engine = std::mem::take(&mut self.search_engine);
-            
-            let result = engine.search(&self.board, depth, Some(|d: i32, s: i32, n: u64, t: u64, pv: &str, hf: usize, nps: u64| {
-                // Format score
-                let score_str = if s.abs() > 40000 {
-                    let mate_distance = (50000 - s.abs() + 1) / 2;
-                    if s > 0 {
-                        format!("mate {}", mate_distance)
-                    } else {
-                        format!("mate -{}", mate_distance)
-                    }
+        let (best_move, _score) = self.search_engine.search(&self.board, depth, Some(|d: i32, s: i32, n: u64, t: u64, pv: &str, hf: usize, nps: u64| {
+            // Format score
+            let score_str = if s.abs() > 40000 {
+                let mate_distance = (50000 - s.abs() + 1) / 2;
+                if s > 0 {
+                    format!("mate {}", mate_distance)
                 } else {
-                    format!("cp {}", s)
-                };
-                
-                let info = format!(
-                    "info depth {} score {} nodes {} time {} nps {} hashfull {} pv {}",
-                    d, score_str, n, t, nps, hf, pv
-                );
-                println!("{}", info);
-                io::stdout().flush().ok();
-            }));
+                    format!("mate -{}", mate_distance)
+                }
+            } else {
+                format!("cp {}", s)
+            };
             
-            self.search_engine = engine;
-            result
-        };
+            let info = format!(
+                "info depth {} score {} nodes {} time {} nps {} hashfull {} pv {}",
+                d, score_str, n, t, nps, hf, pv
+            );
+            println!("{}", info);
+            io::stdout().flush().ok();
+        }));
 
         // Get ponder move from PV
         let mut ponder_str = String::new();
